@@ -43,7 +43,7 @@ def intel_save(config, cat, inteldata):
 
     with open(tmpfile, "wb") as f:
         try:
-            f.write(inteldata.encode("utf-8"))
+            f.write(inteldata)
         except IOError as e:
             logger.exception("Error when writing to the temporary file {0}".format(e))
             exit(3)
@@ -83,12 +83,11 @@ def update_etags(config, etags):
 
 
 def intel_fetch(config, etags):
-    inteldata = ""
-
     s = requests.Session()
 
     for c in config["cat"]:
 
+        print(etags[c])
         r = s.get(
             config["intelurl"] + c + ".intel",
             headers={"If-None-Match": etags[c]},
@@ -99,8 +98,7 @@ def intel_fetch(config, etags):
         if r.status_code == 304 and len(r.content) == 0:
             print("boo-boo")
         elif r.status_code != 304 and len(r.content) != 0:
-            print("new data {0}".format(r.content.decode("UTF-8")))
-            intel_save(config, c, inteldata)
+            intel_save(config, c, r.content)
         elif r.status_code == 304 and len(r.content) != 0:
             print("an impossible thing just happened")
 

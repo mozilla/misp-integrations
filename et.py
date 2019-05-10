@@ -118,7 +118,9 @@ def replist_delta(newlist, reptype):
         for ik, iv in v.items():
             iiv = int(iv)
             c = "Medium"
-            if iiv < 100:
+            if iiv <= 50:
+                continue
+            elif iiv < 100:
                 c = "Low"
             elif iiv == 127:
                 c = "High"
@@ -142,10 +144,6 @@ def replist_delta(newlist, reptype):
 
         adds = newset - oldset
         dels = oldset - newset
-        # print(len(adds))
-        # print(adds)
-        # print(len(dels))
-        # print(dels)
 
     with open(cftmp, "wb") as f:
         f.write(json.dumps(newlist).encode("UTF-8"))

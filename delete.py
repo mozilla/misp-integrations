@@ -43,7 +43,7 @@ def main():
     misp = PyMISP(misp_api_url, misp_api_key, True, cert="test1.pem")
 
     ts = datetime.today() - timedelta(days=1)
-    events = misp.search(controller="events", timestamp=["24h", "1m"])
+    events = misp.search(controller="events", timestamp=["96h", "1m"], tags=["ET"])
 
     for e in events["response"]:
         misp.delete_event(e["Event"]["id"])

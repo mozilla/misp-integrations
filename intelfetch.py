@@ -7,9 +7,6 @@ from yaml import Loader, load, dump
 from sys import argv, stderr
 from os import environ, fsync, stat, rename
 from logging.handlers import SysLogHandler
-from datetime import datetime, timedelta
-from dateutil import parser as date_parser
-from pymisp import ExpandedPyMISP, MISPEvent
 
 
 def setup_logging(stream=stderr, level=logging.INFO):
@@ -24,28 +21,30 @@ def setup_logging(stream=stderr, level=logging.INFO):
 
 def init_config():
     config = {}
-    with open(argv[0].replace(".py", ".yml"), "r") as configyaml:
-        config = load(configyaml, Loader=Loader)
 
-    config["intelurl"] = config.get("intelurl", "<Intel URL>")
-    config["cat"] = config.get("intelcats", ["cat1", "cat2"])
-    config["minsize"] = config.get("minsize", 8192)
-    config["etagsfile"] = config.get("etagsfile", "/<SOMEWHERE>/etag.cache")
-    config["cert"] = config.get("cert", "<CERTFILE>")
-    config["zeekdir"] = config.get("zeekdir", "<PATHTOZEEKINTEL>")
+    with open(argv[0].replace(".py", ".yml"), "r") as configyaml:
+        cf = load(configyaml, Loader=Loader)
+
+    config["debug"] = cf.get("debug", False)
+    config["intelurl"] = cf.get("intelurl", "<Intel URL>")
+    config["cat"] = cf.get("intelcats", ["cat1", "cat2"])
+    config["minsize"] = cf.get("minsize", 8192)
+    config["etagsfile"] = cf.get("etagsfile", "/<SOMEWHERE>/etag.cache")
+    config["cert"] = cf.get("cert", "<CERTFILE>")
+    config["zeekdir"] = cf.get("zeekdir", "<PATHTOZEEKINTEL>")
 
     return config
 
 
 def intel_save(config, cat, inteldata):
-    intelfile = cat + ".intel"
-    tmpfile = cat + ".intel.tmp"
+    intelfile = config["zeekdir"] + cat + ".intel"
+    tmpfile = intelfile + ".tmp"
 
     with open(tmpfile, "wb") as f:
         try:
             f.write(inteldata)
         except IOError as e:
-            logger.exception("Error when writing to the temporary file {0}".format(e))
+            log.exception("Error when writing to the temporary file {0}".format(e))
             exit(3)
         log.debug("Data written into a temporary file, flushing buffers")
         # Flush glibc buffers and write dirty pages
@@ -57,7 +56,7 @@ def intel_save(config, cat, inteldata):
     log.debug("Size of the new data file {0} bytes".format(size))
     if size > config["minsize"]:
         # This is atomic on POSIX
-        logger.debug("Atomic rename...")
+        log.debug("Atomic rename...")
         try:
             rename(tmpfile, intelfile)
         except OSError as e:
@@ -87,7 +86,6 @@ def intel_fetch(config, etags):
 
     for c in config["cat"]:
 
-        print(etags[c])
         r = s.get(
             config["intelurl"] + c + ".intel",
             headers={"If-None-Match": etags[c]},
@@ -96,11 +94,11 @@ def intel_fetch(config, etags):
 
         etags[c] = r.headers["ETag"]
         if r.status_code == 304 and len(r.content) == 0:
-            print("boo-boo")
+            log.debug("No new data found, skipping update")
         elif r.status_code != 304 and len(r.content) != 0:
             intel_save(config, c, r.content)
         elif r.status_code == 304 and len(r.content) != 0:
-            print("an impossible thing just happened")
+            log.error("An impossible thing just happened")
 
     update_etags(config, etags)
 
@@ -110,7 +108,7 @@ def get_etags(config):
 
     try:
         with open(config["etagsfile"], "rb") as c:
-            etags = json.loads(c.read())
+            etags = json.loads(c.read().decode("UTF-8"))
     except FileNotFoundError:
         log.debug("Could not open {0} - reseting ETag".format(config["etagsfile"]))
 
@@ -136,7 +134,7 @@ if __name__ == "__main__":
 
     config = init_config()
 
-    if args.debug:
+    if args.debug or config["debug"]:
         log = setup_logging(level=logging.DEBUG)
     else:
         log = setup_logging(level=logging.INFO)

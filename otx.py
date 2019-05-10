@@ -33,10 +33,12 @@ def init_logging(stream=stderr, level=logging.INFO):
     return logger
 
 
-def init_config():
+def init_config(cfpath):
     config = {}
 
-    with open(argv[0].replace(".py", ".yml"), "r") as configyaml:
+    if not cfpath:
+        cfpath = argv[0].replace(".py", ".yml")
+    with open(cfpath, "r") as configyaml:
         cf = load(configyaml, Loader=Loader)
 
     config["debug"] = cf.get("debug", False)
@@ -45,6 +47,8 @@ def init_config():
     config["misp_api_url"] = cf.get("misp_api_url", "<APIKEY>")
     config["expires"] = cf.get("expires", "3600")
     config["skeleton"] = cf.get("event_skeleton", "eventskeleton.json")
+    config["certfile"] = cf.get("certfile", "cert.pem")
+    config["cache"] = cf.get("cache", "")
 
     return config
 
@@ -101,7 +105,6 @@ def enrich_pulses(pulses):
         if "author_name" in pulse:
             pulse["info"] = pulse["author_name"] + " | " + pulse["name"]
 
-        print(pulse["created"], pulse["name"])
         try:
             dt = date_parser.parse(pulse["created"])
         except (ValueError, OverflowError):
@@ -121,10 +124,10 @@ def enrich_pulses(pulses):
 def fetch_pulses(config):
     pulses = []
 
-    otx = OTXv2Cached(config["otx_api_key"])
+    otx = OTXv2Cached(api_key=config["otx_api_key"], cache_dir=config["cache"])
     otx.update()
     pulses = otx.getall(
-        modified_since=datetime.today() - timedelta(minutes=15), limit=0
+        modified_since=datetime.today() - timedelta(minutes=16), limit=0
     )
 
     return pulses
@@ -137,45 +140,59 @@ def map_otx_to_misp(indicator):
     attrmap["desc"] = indicator["description"]
 
     if indicator["type"] == "FileHash-SHA256":
+        attrmap["category"] = "Artifacts dropped"
         attrmap["type"] = "sha256"
         return attrmap
     elif indicator["type"] == "FileHash-SHA1":
+        attrmap["category"] = "Artifacts dropped"
         attrmap["type"] = "sha1"
         return attrmap
     elif indicator["type"] == "FileHash-MD5":
+        attrmap["category"] = "Artifacts dropped"
         attrmap["type"] = "md5"
         return attrmap
     elif indicator["type"] == "URI" or indicator["type"] == "URL":
+        attrmap["category"] = "Network activity"
         attrmap["type"] = "url"
         return attrmap
     elif indicator["type"] == "domain":
+        attrmap["category"] = "Network activity"
         attrmap["type"] = "domain"
         return attrmap
     elif indicator["type"] == "hostname":
+        attrmap["category"] = "Network activity"
         attrmap["type"] = "hostname"
         return attrmap
     elif indicator["type"] == "IPv4" or indicator["type"] == "IPv6":
+        attrmap["category"] = "Network activity"
         attrmap["type"] = "ip-dst"
         return attrmap
     elif indicator["type"] == "email":
+        attrmap["category"] = "Payload delivery"
         attrmap["type"] = "email-src"
         return attrmap
     elif indicator["type"] == "Mutex":
+        attrmap["category"] = "Artifacts dropped"
         attrmap["type"] = "mutex"
         return attrmap
     elif indicator["type"] == "CVE":
+        attrmap["category"] = "Payload delivery"
         attrmap["type"] = "vulnerability"
         return attrmap
     elif indicator["type"] == "FileHash-IMPHASH":
+        attrmap["category"] = "Artifacts dropped"
         attrmap["type"] = "imphash"
         return attrmap
     elif indicator["type"] == "FileHash-PEHASH":
+        attrmap["category"] = "Artifacts dropped"
         attrmap["type"] = "pehash"
         return attrmap
     elif indicator["type"] == "FilePath":
+        attrmap["category"] = "Artifacts dropped"
         attrmap["type"] = "filename"
         return attrmap
     elif indicator["type"] == "YARA":
+        attrmap["category"] = "Payload delivery"
         attrmap["type"] = "yara"
         return attrmap
     else:
@@ -189,8 +206,7 @@ def create_attr_obj(mattr):
 
     attr.disable_correlation = False
 
-    # attrmap["desc"]
-    attr.category = "Network activity"
+    attr.category = mattr["category"]
     attr.value = mattr["value"]
     attr.type = mattr["type"]
     attr.comment = mattr["desc"]
@@ -200,8 +216,8 @@ def create_attr_obj(mattr):
         "ip-dst",
         "ip-src",
         "hostname",
-        # "domainname",
-        # "url",
+        "domainname",
+        "url",
         "md5",
         "sha1",
         "sha256",
@@ -213,7 +229,7 @@ def create_attr_obj(mattr):
 
 def main():
     misp = ExpandedPyMISP(
-        config["misp_api_url"], config["misp_api_key"], True, cert="test1.pem"
+        config["misp_api_url"], config["misp_api_key"], True, cert=config["certfile"]
     )
 
     pulses = fetch_pulses(config)
@@ -223,6 +239,7 @@ def main():
 
         for ep in epulses:
             event = create_event_obj(ep)
+            event.add_tag("OTX")
             event.add_tag("nsm")
 
             for indicator in ep["indicators"]:
@@ -240,7 +257,11 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--debug", help="Print debug messages")
     args = parser.parse_args()
 
-    config = init_config()
+    cfpath = ""
+    if args.config:
+        config = init_config(cfpath=args.config)
+    else:
+        config = init_config(cfpath)
 
     if args.debug or config["debug"]:
         log = init_logging(level=logging.DEBUG)

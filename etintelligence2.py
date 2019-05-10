@@ -34,10 +34,12 @@ def init_logging(stream=stderr, level=logging.INFO):
     return logger
 
 
-def init_config():
+def init_config(cfpath):
     config = {}
 
-    with open(argv[0].replace(".py", ".yml"), "r") as configyaml:
+    if not cfpath:
+        cfpath = argv[0].replace(".py", ".yml")
+    with open(cfpath, "r") as configyaml:
         cf = load(configyaml, Loader=Loader)
 
     config["debug"] = cf.get("debug", False)
@@ -59,6 +61,7 @@ def init_config():
     config["reptypes"] = cf.get("reptypes", ["ip", "domain"])
     config["nsmcats"] = cf.get("nsmcats", "")
     config["cache"] = cf.get("cache", "/var/www/MISP/.cache")
+    config["certfile"] = cf.get("certfile", "cert.pem")
 
     return config
 
@@ -176,23 +179,24 @@ def add_attr_to_event(misp, ioc, cat, confidence, ioctype, e):
     a = create_attr_obj(ioc, cat, confidence, ioctype, e)
     if a:
         r = e.attributes.append(a)
-        print(a.tags)
         if "nsm" in a.tags:
             r = e.add_tag("nsm")
         r = misp.update_event(e)
 
 
 def proc_chunk_adds(misp, adds, ioctype):
+    print("proc_chunk_adds size {0}".format(len(adds)))
     event = create_event_obj(ioctype)
     for ioc in adds:
         ioc, cat, confidence = json.loads(ioc)
         attr = create_attr_obj(ioc, cat, confidence, ioctype)
         for tag in attr.tags:
-            if tag.name:
+            if tag.name == "nsm":
                 event.add_tag("nsm")
         event.attributes.append(attr)
         event.add_tag(cat + ":" + confidence)
         event.add_tag(cat)
+        event.add_tag("ET")
 
     event_json = event.to_json().replace("\n", "")
     r = misp.add_event(event_json)
@@ -225,6 +229,7 @@ def proc_chunk_adds_old(misp, adds, ioctype):
 
 
 def proc_adds(misp, adds, ioctype):
+    print("proc_adds size {0}".format(len(adds)))
     adds_list = list(adds)
     [
         proc_chunk_adds(misp, adds_list[i : i + 1000], ioctype)
@@ -266,13 +271,13 @@ def create_event_obj(ioctype):
     misp_event.published = True
     misp_event.uuid = str(uuid.uuid4())
 
-    misp_event.add_attribute(
-        "campaign-name",
-        misp_event.info,
-        attribute="Attribution",
-        comment="Campaign name",
-        disable_correlation=True,
-    )
+    # misp_event.add_attribute(
+    #    "campaign-name",
+    #    misp_event.info,
+    #    attribute="Attribution",
+    #    comment="Campaign name",
+    #    disable_correlation=True,
+    # )
     misp_event.add_attribute(
         "text",
         "Emerging Threats",
@@ -296,7 +301,7 @@ def main():
     log.info("Started and initialized")
 
     misp = ExpandedPyMISP(
-        config["misp_api_url"], config["misp_api_key"], True, cert="test1.pem"
+        config["misp_api_url"], config["misp_api_key"], True, cert=config["certfile"]
     )
 
     for reptype in config["reptypes"]:
@@ -313,7 +318,11 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--debug", help="Print debug messages")
     args = parser.parse_args()
 
-    config = init_config()
+    cfpath = ""
+    if args.config:
+        config = init_config(cfpath=args.config)
+    else:
+        config = init_config(cfpath)
 
     if args.debug or config["debug"]:
         log = init_logging(level=logging.DEBUG)

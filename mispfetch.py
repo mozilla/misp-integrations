@@ -8,6 +8,7 @@ from logging.handlers import SysLogHandler
 from datetime import datetime, timedelta
 from dateutil import parser as date_parser
 from pymisp import ExpandedPyMISP, MISPEvent
+import yaml
 
 
 def init_logging(stream=stderr, level=logging.INFO):
@@ -17,6 +18,8 @@ def init_logging(stream=stderr, level=logging.INFO):
     logging.basicConfig(format=formatstr, datefmt="%H:%M:%S", stream=stream)
     logger = logging.getLogger(__name__)
     logger.setLevel(level)
+    logger.logThreads = 0
+    logger.logProcesses = 0
     return logger
 
 
@@ -32,11 +35,18 @@ def init_config(cfpath):
     config["misp_api_key"] = cf.get("misp_api_key", "<MISPAPIKEY>")
     config["misp_api_url"] = cf.get("misp_api_url", "<APIKEY>")
     config["intelfile"] = cf.get("intelfile", "misp.intel")
-    config["minsize"] = cf.get("minsize", 8192)
+    config["minsize"] = cf.get("minsize", 1024)
     config["certfile"] = cf.get("certfile", "cert.pem")
     config["days"] = cf.get("days", 30)
     config["threatlevel"] = cf.get("threatlevel", [3, 4])
     config["tags"] = cf.get("tags", ["tag1", "tag2"])
+    config["mapfile"] = cf.get("mapfile", "misptozeek.yml")
+    config["proxies"] = cf.get("proxies", "")
+
+    with open(config["mapfile"], "r") as m:
+        map = m.read()
+        config["yap"] = yaml.load(map)
+        del (map)
 
     return config
 
@@ -49,17 +59,21 @@ def fixup_url(url):
     return kill_tabs(url.replace("http://", ""))
 
 
-def stuff_desc(tags):
+def parse_attr_tags(tags):
+    ltags = {}
     for tag in tags:
-        if ":" in tag["name"]:
-            return tag["name"]
-
-
-def dropornot(attr):
-    for tag in attr["Tag"]:
         if tag["name"] == "nsm":
-            return False
-    return True
+            ltags["nsm"] = True
+        if ":" in tag["name"]:
+            k, v = tag["name"].split(":")
+            if k == "notice":
+                ltags["notice"] = v
+            elif k == "expires":
+                ltags["expires"] = v
+            else:
+                ltags["desc"] = tag["name"]
+
+    return ltags
 
 
 def main():
@@ -77,106 +91,88 @@ def main():
         threatlevel=config["threatlevel"],
         date_from=datefrom,
     )
+    st = list(config["yap"].keys())
     tmpfile = config["intelfile"] + ".tmp"
     with open(tmpfile, "wb") as f:
         f.write(header.encode("utf-8"))
         for event in events:
+            zf = []
             iocline = {}
             fields = []
-            inteltype = "UNKNOWN"
-            expire = "3600"
+            expires = "3600"
             source = None
-            url = None
+            link = None
             notice = "F"
             attribution = None
             for attr in event["Event"]["Attribute"]:
-                if attr["type"] == "md5":
-                    if dropornot(attr):
-                        continue
-                    inteltype = "Intel::FILE_HASH"
-                    localtags = stuff_desc(attr["Tag"])
-                if attr["type"] == "sha1":
-                    if dropornot(attr):
-                        continue
-                    inteltype = "Intel::FILE_HASH"
-                    localtags = stuff_desc(attr["Tag"])
-                if attr["type"] == "sha256":
-                    if dropornot(attr):
-                        continue
-                    inteltype = "Intel::FILE_HASH"
-                    localtags = stuff_desc(attr["Tag"])
-                if attr["type"] == "url":
-                    if dropornot(attr):
-                        continue
-                    inteltype = "Intel::URL"
-                    attr["value"] = fixup_url(attr["value"])
-                    localtags = stuff_desc(attr["Tag"])
-                if attr["type"] == "hostname":
-                    if dropornot(attr):
-                        continue
-                    inteltype = "Intel::DOMAIN"
-                    localtags = stuff_desc(attr["Tag"])
-                # XXX: needs a Zeek code to match subdomains
-                if attr["type"] == "domain":
-                    if dropornot(attr):
-                        continue
-                    inteltype = "Intel::DOMAIN"
-                    localtags = stuff_desc(attr["Tag"])
-                if attr["type"] == "ip-dst":
-                    if dropornot(attr):
-                        continue
-                    inteltype = "Intel::ADDR"
-                    localtags = stuff_desc(attr["Tag"])
-                if attr["type"] == "ip-src":
-                    if dropornot(attr):
-                        continue
-                    inteltype = "Intel::ADDR"
-                    localtags = stuff_desc(attr["Tag"])
-                if attr["comment"] == "Source":
-                    source = kill_tabs(attr["value"])
-                if attr["category"] == "Attribution":
-                    attribution = kill_tabs(attr["value"])
-                if attr["comment"] == "URL":
-                    url = attr["value"]
-                if attr["comment"] == "Notice":
-                    notice = "Y"
-                if attr["category"] == "Artifacts dropped":
-                    iocline["value"] = attr["value"]
-                if attr["category"] == "Network activity":
-                    iocline["value"] = attr["value"]
-                if expire is not None:
-                    iocline["expire"] = expire
-                if source is not None:
-                    iocline["source"] = kill_tabs(source)
-                else:
-                    iocline["source"] = desc
-                if url is not None:
-                    iocline["url"] = url
-                if len(iocline.keys()) == 4:
-                    if attribution:
-                        desc = attribution
-                    else:
-                        desc = localtags
-                    if "value" not in iocline:
-                        continue
-                    fields = [
-                        iocline["value"],
-                        inteltype,
-                        iocline["source"],
-                        desc,
-                        iocline["url"],
-                        event["Event"]["uuid"],
-                        notice,
-                        iocline["expire"],
-                    ]
-                    try:
-                        f.write("\t".join(fields).encode("utf-8"))
-                    except IOError as e:
-                        log.exception(
-                            "Error when writing to the temporary file {0}".format(e)
+                if (
+                    attr["category"] == "Artifacts dropped"
+                    or attr["category"] == "Network activity"
+                ):
+                    if attr["type"] not in st:
+                        log.error(
+                            "Unsupported Zeek type for attribute {0} MISP type {1}".format(
+                                attr["value"], attr["type"]
+                            )
                         )
-                        exit(3)
-                    f.write("\n".encode("utf-8"))
+                        continue
+                    iocline = {}
+                    iocline[attr["value"]] = {}
+                    iocline[attr["value"]]["type"] = config["yap"][attr["type"]]
+                    localtags = {}
+                    localtags = parse_attr_tags(attr["Tag"])
+                    if "nsm" not in localtags:
+                        continue
+                    if "notice" in localtags:
+                        iocline[attr["value"]]["notice"] = localtags["notice"]
+                    if "expires" in localtags:
+                        iocline[attr["value"]]["expires"] = localtags["expires"]
+                    if "desc" in localtags:
+                        iocline[attr["value"]]["desc"] = localtags["desc"]
+                    zf.append(iocline)
+                elif attr["category"] == "Other":
+                    if attr["type"] == "text":
+                        if attr["comment"] == "Source":
+                            source = kill_tabs(attr["value"])
+                        if attr["comment"] == "Notice":
+                            notice = "Y"
+                elif attr["category"] == "Attribution":
+                    if attr["type"] == "campaign-name":
+                        attribution = attr["value"]
+                elif attr["category"] == "External analysis":
+                    if attr["type"] == "link":
+                        link = attr["value"]
+            if attribution:
+                desc = attribution
+            for zl in zf:
+                e = list(zl.keys())[0]
+                if "notice" is None:
+                    notice = zl[e]["notice"]
+                if "expires" in zl[e]:
+                    expires = zl[e]["expires"]
+                if "desc" in zl[e]:
+                    desc = zl[e]["desc"]
+                fields = [
+                    e,
+                    zl[e]["type"],
+                    kill_tabs(source),
+                    kill_tabs(desc),
+                    link,
+                    event["Event"]["uuid"],
+                    notice,
+                    expires,
+                ]
+                # print(fields)
+                # if "value" not in iocline:
+                #   continue
+                try:
+                    f.write("\t".join(fields).encode("utf-8"))
+                except IOError as e:
+                    log.exception(
+                        "Error when writing to the temporary file {0}".format(e)
+                    )
+                    exit(3)
+                f.write("\n".encode("utf-8"))
         log.debug("Data written into a temporary file, flushing buffers")
         # Flush glibc buffers and write dirty pages
         # Does not cause a global pagecache writeback

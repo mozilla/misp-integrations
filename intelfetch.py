@@ -7,6 +7,9 @@ from yaml import Loader, load, dump
 from sys import argv, stderr
 from os import environ, fsync, stat, rename
 from logging.handlers import SysLogHandler
+from requests.packages.urllib3.util import Retry
+from requests.adapters import HTTPAdapter
+from requests.exceptions import HTTPError
 
 
 def setup_logging(stream=stderr, level=logging.INFO):
@@ -16,6 +19,8 @@ def setup_logging(stream=stderr, level=logging.INFO):
     logging.basicConfig(format=formatstr, datefmt="%H:%M:%S", stream=stream)
     logger = logging.getLogger(__name__)
     logger.setLevel(level)
+    logger.logThreads = 0
+    logger.logProcesses = 0
     return logger
 
 
@@ -32,6 +37,7 @@ def init_config():
     config["etagsfile"] = cf.get("etagsfile", "/<SOMEWHERE>/etag.cache")
     config["cert"] = cf.get("cert", "<CERTFILE>")
     config["zeekdir"] = cf.get("zeekdir", "<PATHTOZEEKINTEL>")
+    config["proxies"] = cf.get("proxies", "")
 
     return config
 
@@ -82,23 +88,38 @@ def update_etags(config, etags):
 
 
 def intel_fetch(config, etags):
+    ret = Retry(total=5, status_forcelist=[429, 500, 502, 503], backoff_factor=5)
+    a = HTTPAdapter(pool_connections=10, max_retries=ret)
     s = requests.Session()
+    with requests.Session() as s:
+        s.mount("https://", a)
+        if config["proxies"]:
+            s.proxies = {"https": config["proxies"]}
 
-    for c in config["cat"]:
+        for c in config["cat"]:
 
-        r = s.get(
-            config["intelurl"] + c + ".intel",
-            headers={"If-None-Match": etags[c]},
-            cert=config["cert"],
-        )
+            try:
+                r = s.get(
+                    config["intelurl"] + c + ".intel",
+                    headers={"If-None-Match": etags[c]},
+                    cert=config["cert"],
+                )
+            except HTTPError as e:
+                log.error(
+                    f"HTTPS request failed to download the {c} reputation list: {e}"
+                )
+            except Exception as e:
+                log.error(
+                    f"Something went south and I failed to download the {c} reputation list: {e}"
+                )
 
-        etags[c] = r.headers["ETag"]
-        if r.status_code == 304 and len(r.content) == 0:
-            log.debug("No new data found, skipping update")
-        elif r.status_code != 304 and len(r.content) != 0:
-            intel_save(config, c, r.content)
-        elif r.status_code == 304 and len(r.content) != 0:
-            log.error("An impossible thing just happened")
+            etags[c] = r.headers["ETag"]
+            if r.status_code == 304 and len(r.content) == 0:
+                log.debug("No new data found, skipping update")
+            elif r.status_code != 304 and len(r.content) != 0:
+                intel_save(config, c, r.content)
+            elif r.status_code == 304 and len(r.content) != 0:
+                log.error("An impossible thing just happened")
 
     update_etags(config, etags)
 

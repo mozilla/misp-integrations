@@ -30,6 +30,8 @@ def init_logging(stream=stderr, level=logging.INFO):
     logging.basicConfig(format=formatstr, datefmt="%H:%M:%S", stream=stream)
     logger = logging.getLogger(__name__)
     logger.setLevel(level)
+    logger.logThreads = 0
+    logger.logProcesses = 0
     return logger
 
 
@@ -49,6 +51,7 @@ def init_config(cfpath):
     config["skeleton"] = cf.get("event_skeleton", "eventskeleton.json")
     config["certfile"] = cf.get("certfile", "cert.pem")
     config["cache"] = cf.get("cache", "")
+    config["proxies"] = cf.get("proxies", "")
 
     return config
 

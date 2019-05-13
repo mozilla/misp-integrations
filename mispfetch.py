@@ -18,6 +18,8 @@ def init_logging(stream=stderr, level=logging.INFO):
     logging.basicConfig(format=formatstr, datefmt="%H:%M:%S", stream=stream)
     logger = logging.getLogger(__name__)
     logger.setLevel(level)
+    logger.logThreads = 0
+    logger.logProcesses = 0
     return logger
 
 
@@ -39,6 +41,7 @@ def init_config(cfpath):
     config["threatlevel"] = cf.get("threatlevel", [3, 4])
     config["tags"] = cf.get("tags", ["tag1", "tag2"])
     config["mapfile"] = cf.get("mapfile", "misptozeek.yml")
+    config["proxies"] = cf.get("proxies", "")
 
     with open(config["mapfile"], "r") as m:
         map = m.read()

@@ -5,7 +5,6 @@ from yaml import Loader, load, dump
 from sys import argv, stderr
 from os import environ, fsync, stat, rename
 from logging.handlers import SysLogHandler
-from datetime import datetime, timedelta
 from pymisp import PyMISP, ExpandedPyMISP, MISPEvent
 
 
@@ -16,8 +15,6 @@ def setup_logging(stream=stderr, level=logging.INFO):
     logging.basicConfig(format=formatstr, datefmt="%H:%M:%S", stream=stream)
     logger = logging.getLogger(__name__)
     logger.setLevel(level)
-    logger.logThreads = 0
-    logger.logProcesses = 0
     return logger
 
 
@@ -34,7 +31,6 @@ def main():
 
     misp_api_key = config.get("misp_api_key", "<MISPAPIKEY>")
     misp_api_url = config.get("misp_api_url", "<APIKEY>")
-    config["proxies"] = cf.get("proxies", "")
 
     if args.debug:
         logger = setup_logging(level=logging.DEBUG)
@@ -44,9 +40,6 @@ def main():
     logger.debug("Started and initialized")
 
     misp = PyMISP(misp_api_url, misp_api_key, True, cert="test1.pem")
-
-    ts = datetime.today() - timedelta(days=1)
-    events = misp.search(controller="events", timestamp=["96h", "1m"], tags=["ET"])
 
     for e in events["response"]:
         misp.delete_event(e["Event"]["id"])

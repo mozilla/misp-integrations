@@ -8,6 +8,9 @@ from logging.handlers import SysLogHandler
 from datetime import datetime, timedelta
 from dateutil import parser as date_parser
 import requests
+from requests.packages.urllib3.util import Retry
+from requests.adapters import HTTPAdapter
+from requests.exceptions import HTTPError
 import json
 import uuid
 import os, sys
@@ -31,6 +34,9 @@ def init_logging(stream=stderr, level=logging.INFO):
     logging.basicConfig(format=formatstr, datefmt="%H:%M:%S", stream=stream)
     logger = logging.getLogger(__name__)
     logger.setLevel(level)
+    logger._srcfile = None
+    logger.logThreads = 0
+    logger.logProcesses = 0
     return logger
 
 
@@ -44,12 +50,12 @@ def init_config(cfpath):
 
     config["debug"] = cf.get("debug", False)
     config["etintel_api_key"] = cf.get("etintel_api_key", "<ETINTELAPIKEY>")
-    config["iprep_url"] = (
+    config["ip"] = (
         "https://rules.emergingthreatspro.com/"
         + config["etintel_api_key"]
         + "/reputation/iprepdata.json"
     )
-    config["domainrep_url"] = (
+    config["domain"] = (
         "https://rules.emergingthreatspro.com/"
         + config["etintel_api_key"]
         + "/reputation/domainrepdata.json"
@@ -62,6 +68,7 @@ def init_config(cfpath):
     config["nsmcats"] = cf.get("nsmcats", "")
     config["cache"] = cf.get("cache", "/var/www/MISP/.cache")
     config["certfile"] = cf.get("certfile", "cert.pem")
+    config["proxies"] = cf.get("proxies", "")
 
     return config
 
@@ -84,13 +91,29 @@ def inverse_dict(rev):
     return fwd
 
 
-def fetch_replist(reptype):
-    if reptype == "ip":
-        r = requests.get(config["iprep_url"])
-    if reptype == "domain":
-        r = requests.get(config["domainrep_url"])
+def fetch_replists(reptypes):
+    ret = Retry(total=5, status_forcelist=[429, 500, 502, 503], backoff_factor=5)
+    a = HTTPAdapter(pool_connections=10, max_retries=ret)
+    with requests.Session() as s:
+        s.mount("https://", a)
+        if config["proxies"]:
+            s.proxies = {"https": config["proxies"]}
+        replists = {}
+        for rt in reptypes:
+            try:
+                r = s.get(config[rt])
+                response.raise_for_status()
+                replists[rt] = r.json()
+            except HTTPError as e:
+                log.error(
+                    f"HTTPS request failed to download the {rt} reputation list: {e}"
+                )
+            except Exception as e:
+                log.error(
+                    f"Something went south and I failed to download the {rt} reputation list: {e}"
+                )
 
-    return r.json()
+    return replists
 
 
 def replist_delta(newlist, reptype):
@@ -127,7 +150,7 @@ def replist_delta(newlist, reptype):
             newset.add(json.dumps([k, ik, c]))
 
     if firstrun:
-        print("first run - pushing everything to MISP")
+        log.info(f"first run - pushing everything to MISP")
         adds = newset
     else:
         with open(cf) as f:
@@ -183,7 +206,7 @@ def add_attr_to_event(misp, ioc, cat, confidence, ioctype, e):
 
 
 def proc_chunk_adds(misp, adds, ioctype):
-    print("proc_chunk_adds size {0}".format(len(adds)))
+    log.debug(f"proc_chunk_adds size {len(adds)}")
     event = create_event_obj(ioctype)
     for ioc in adds:
         ioc, cat, confidence = json.loads(ioc)
@@ -198,6 +221,8 @@ def proc_chunk_adds(misp, adds, ioctype):
 
     event_json = event.to_json().replace("\n", "")
     r = misp.add_event(event_json)
+    if r["error"]:
+        log.error(f"Failed while submitting event to MISP: {r['error'']}")
 
 
 def proc_chunk_adds_old(misp, adds, ioctype):
@@ -227,7 +252,7 @@ def proc_chunk_adds_old(misp, adds, ioctype):
 
 
 def proc_adds(misp, adds, ioctype):
-    print("proc_adds size {0}".format(len(adds)))
+    log.debug(f"proc_adds size {len(adds)}")
     adds_list = list(adds)
     [
         proc_chunk_adds(misp, adds_list[i : i + 1000], ioctype)
@@ -236,7 +261,8 @@ def proc_adds(misp, adds, ioctype):
 
 
 def proc_dels(misp, dels, replist, reptype):
-    dels = {'["86.35.15.215", "CnC", "77"]', '[" 109.99.228.58", "Scanner", "127"]'}
+    print(dels)
+    #dels = {'["86.35.15.215", "CnC", "77"]', '[" 109.99.228.58", "Scanner", "127"]'}
     for item in dels:
         ioc, cat, confidence = json.loads(item)
         attr = misp.search(
@@ -245,6 +271,7 @@ def proc_dels(misp, dels, replist, reptype):
             tag=cat + ":" + confidence,
             pythonify=True,
         )
+        print(attr)
         for a in attr:
             e = misp.get_event(a["event_id"])
             r = e.delete_attribute(a["id"])
@@ -253,6 +280,7 @@ def proc_dels(misp, dels, replist, reptype):
     # if no ioc-specific tags are left, remove the event (or just leave it around?)
     # if no attributes with cat under event, remove tag cat from event
     # if no attributes with cat:confidence under event, remove tag cat:confidence from event
+    # can MISP return a list of event objects that have attributes linked? would that be faster?
     return
 
 
@@ -269,13 +297,6 @@ def create_event_obj(ioctype):
     misp_event.published = True
     misp_event.uuid = str(uuid.uuid4())
 
-    # misp_event.add_attribute(
-    #    "campaign-name",
-    #    misp_event.info,
-    #    attribute="Attribution",
-    #    comment="Campaign name",
-    #    disable_correlation=True,
-    # )
     misp_event.add_attribute(
         "text",
         "Emerging Threats",
@@ -302,11 +323,11 @@ def main():
         config["misp_api_url"], config["misp_api_key"], True, cert=config["certfile"]
     )
 
+    replists = fetch_replists(config["reptypes"])
     for reptype in config["reptypes"]:
-        replist = fetch_replist(reptype)
-        (adds, dels) = replist_delta(replist, reptype)
+        (adds, dels) = replist_delta(replists[reptype], reptype)
         proc_adds(misp, adds, reptype)
-        proc_dels(misp, dels, replist, reptype)
+        proc_dels(misp, dels, replists[reptype], reptype)
 
 
 if __name__ == "__main__":

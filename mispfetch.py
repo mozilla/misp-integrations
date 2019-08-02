@@ -142,6 +142,8 @@ def main():
                 elif attr["category"] == "External analysis":
                     if attr["type"] == "link":
                         link = attr["value"]
+            if not link:
+                link = "https://misp.infosec.mozilla.org"
             if attribution:
                 desc = attribution
             for zl in zf:

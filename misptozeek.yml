@@ -1,0 +1,9 @@
+---
+md5: Intel::FILE_HASH
+sha1: Intel::FILE_HASH
+sha256: Intel::FILE_HASH
+url: Intel::URL
+hostname: Intel::DOMAIN
+domain: Intel::DOMAIN
+ip-src: Intel::ADDR
+ip-dst: Intel::ADDR

@@ -1,0 +1,17 @@
+---
+etintel_api_key: <SECRETZ>
+proxy:
+wlfile: whitelist.yml
+inteldir: /etc/zeek/scripts/zeekzilla
+intelfile: et.intel
+thresholds:
+  medium: 1
+  high: 126
+nsmcats:
+  DriveBySrc: 
+    - Medium
+    - Low
+  Compromised:
+    - Low
+    - Medium
+    - High

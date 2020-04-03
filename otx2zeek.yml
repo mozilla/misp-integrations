@@ -1,0 +1,8 @@
+---
+otx_api_key: <SECRETZ>
+proxy:
+cache: otxcache
+mapfile: otx2zeek.map.yml
+wlfile: whitelist.yml
+inteldir: /etc/zeek/scripts/zeekzilla
+intelfile: otx.intel

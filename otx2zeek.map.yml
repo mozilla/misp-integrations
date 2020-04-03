@@ -1,0 +1,12 @@
+ioctypes:
+    FileHash-MD5: Intel::FILE_HASH
+    FileHash-SHA1: Intel::FILE_HASH
+    FileHash-SHA256: Intel::FILE_HASH
+    URL: Intel::URL
+    hostname: Intel::DOMAIN
+    domain: Intel::DOMAIN
+    IPv4: Intel::ADDR
+    IPv6: Intel::ADDR
+meta:
+    source: author_name
+    desc: name

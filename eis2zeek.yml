@@ -1,0 +1,11 @@
+---
+username: <USER>
+password: <SECRETZ>
+upstream_url: https://github.com/<ORG>/<REPO>
+reponame: <REPO>
+zeekrepopath: zeek
+repodir: /home/zeek
+proxy: http://<PROXY>:<PORT>
+wlfile: whitelist.yml
+inteldir: /etc/zeek/scripts/intelzilla
+intelfile: whatever
